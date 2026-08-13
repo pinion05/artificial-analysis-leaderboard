@@ -1,0 +1,19 @@
+{
+  "name": "artificial-analysis-leaderboard",
+  "version": "1.1.0",
+  "description": "Live LLM leaderboard skill for pi: model rankings (Intelligence/Coding/Agentic Index) plus deep single-model profiles from artificialanalysis.ai.",
+  "license": "MIT",
+  "keywords": [
+    "pi-package",
+    "skill",
+    "llm",
+    "leaderboard",
+    "benchmarks",
+    "artificial-analysis"
+  ],
+  "pi": {
+    "skills": [
+      "./skills"
+    ]
+  }
+}
