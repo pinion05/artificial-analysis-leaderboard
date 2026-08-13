@@ -1,6 +1,6 @@
 ---
 name: artificial-analysis-leaderboard
-description: Fetch live LLM model rankings and Artificial Analysis composite indices — Intelligence Index, Coding Index, and Agentic Index — plus speed and pricing from https://artificialanalysis.ai/leaderboards/models. Use when the user asks for model benchmarks, "best models", model comparison, leaderboard/ranking, "가장 성능 좋은 모델", "모델 순위", "코딩 잘하는 모델", "에이전트/코딩 점수", Intelligence/Coding/Agentic Index, model speed/latency/pricing, or which model to pick for a task. Also deep-dives a single model (--deep): every benchmark score, full price breakdown, and the speed/latency percentile distribution. Returns current (live) data, not cached.
+description: 'Fetch live LLM model rankings and Artificial Analysis composite indices — Intelligence Index, Coding Index, and Agentic Index — plus speed and pricing from https://artificialanalysis.ai/leaderboards/models. Use when the user asks for model benchmarks, "best models", model comparison, leaderboard/ranking, "가장 성능 좋은 모델", "모델 순위", "코딩 잘하는 모델", "에이전트/코딩 점수", Intelligence/Coding/Agentic Index, model speed/latency/pricing, or which model to pick for a task. Also deep-dives a single model (--deep): every benchmark score, full price breakdown, and the speed/latency percentile distribution. Returns current (live) data, not cached.'
 ---
 
 Invoke as a skill (e.g. `/skill:artificial-analysis-leaderboard`) or just ask about model
