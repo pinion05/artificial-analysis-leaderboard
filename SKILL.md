@@ -1,6 +1,6 @@
 ---
 name: artificial-analysis-leaderboard
-description: Fetch live LLM model rankings and Artificial Analysis composite indices — Intelligence Index, Coding Index, and Agentic Index — plus speed and pricing from https://artificialanalysis.ai/leaderboards/models. Use when the user asks for model benchmarks, "best models", model comparison, leaderboard/ranking, "가장 성능 좋은 모델", "모델 순위", "코딩 잘하는 모델", "에이전트/코딩 점수", Intelligence/Coding/Agentic Index, model speed/latency/pricing, or which model to pick for a task. Returns current (live) data, not cached.
+description: Fetch live LLM model rankings and Artificial Analysis composite indices — Intelligence Index, Coding Index, and Agentic Index — plus speed and pricing from https://artificialanalysis.ai/leaderboards/models. Use when the user asks for model benchmarks, "best models", model comparison, leaderboard/ranking, "가장 성능 좋은 모델", "모델 순위", "코딩 잘하는 모델", "에이전트/코딩 점수", Intelligence/Coding/Agentic Index, model speed/latency/pricing, or which model to pick for a task. Also deep-dives a single model (--deep): every benchmark score, full price breakdown, and the speed/latency percentile distribution. Returns current (live) data, not cached.
 ---
 
 Invoke as a skill (e.g. `/skill:artificial-analysis-leaderboard`) or just ask about model
@@ -21,6 +21,7 @@ human-readable table or JSON.
 - "코딩 잘하는 모델", "에이전트 점수", "best coding/agent model"
 - "가장 빠른 모델", "가장 싼 모델", "best speed/price model"
 - Filtering by creator (Anthropic, OpenAI, Google, DeepSeek, …) or model name
+- Deep-dive one model — "이 모델 자세히", "GPT-5.6 벤치마크가 뭐야", "한 모델 가격/지연 분포 보여줘" → `--deep`
 
 ## How it works
 
@@ -78,10 +79,42 @@ node aa-leaderboard.js --creator deepseek
 # Filter by model name (substring, case-insensitive)
 node aa-leaderboard.js --model 'mini' --top 10
 
+# Deep profile of ONE model: identity, all 3 indices, every benchmark,
+# full price breakdown (input/output/cache/blends), and the speed/latency
+# percentile distribution (p5–p95). Works by display name OR slug.
+node aa-leaderboard.js --deep --model 'Claude Opus 5 (max)'
+node aa-leaderboard.js --deep --model claude-opus-5          # slug works too
+node aa-leaderboard.js --deep --model claude-opus-5 --json   # raw ~90-field payload
+
 # Machine-readable JSON (for piping / further processing)
 node aa-leaderboard.js --json --top 20
 node aa-leaderboard.js --json --creator google
 ```
+
+## Deep single-model profile (`--deep`)
+
+`--deep` trades the many-rows table for a **full profile of one model**, surfacing
+the ~90 fields the site embeds per model (the table only shows ~8 of them). It
+groups them readably and is meant for "investigate this one model" questions.
+
+Requires `--model X` (name or slug, substring OK; an exact match wins ties). Sections:
+
+- **Identity** — full name, slug, creator + country, release date, context window,
+  size/price tier, reasoning / open-weights flags, modalities, OpenRouter id
+- **Composite Indices** — Intelligence / Coding / Agentic (0–100)
+- **Benchmarks** — GPQA, MMMU-Pro, HLE, Terminal-Bench (v2.1 + hard), SciCode,
+  τ²-Bench, Long-Context Reasoning, GDPval (normalized + Elo w/ 95% CI), Critical
+  Point, Analyst Agent, IT-Bench (SRE), IF-Bench, Omniscience (accuracy /
+  non-hallucination / score)
+- **Pricing** — input / output / cache-read (w/ discount %) / cache-write, plus the
+  blended variants (7:2:1 is the leaderboard's headline price)
+- **Speed & latency distribution** — throughput and time-to-first-token across
+  **p5 / p25 / p50 / p75 / p95** (a single median hides the long-tail reasoning runs),
+  plus end-to-end and answer speed
+- **Intelligence Index internals** — cost / time / tokens per eval task
+
+`--deep --json` emits the whole decoded object (nested objects intact,
+`$undefined` normalised to null) for programmatic use.
 
 ### Flags
 
@@ -90,9 +123,10 @@ node aa-leaderboard.js --json --creator google
 | `--top N` | Limit to top N rows (after sort + filter) |
 | `--sort FIELD` | `intelligence` (default) · `coding` · `agentic` · `speed` · `price` · `latency` · `name` |
 | `--creator X` | Filter: creator contains X (case-insensitive) |
-| `--model X` | Filter: model name contains X (case-insensitive) |
+| `--model X` | Filter: model name **or slug** contains X (case-insensitive). Required with `--deep`. |
+| `--deep` | Full single-model profile (use with `--model X`): indices, every benchmark, price breakdown, latency percentiles |
 | `--table` | Human-readable aligned table (default) |
-| `--json` | Emit JSON array (each row = object with the fields above) |
+| `--json` | Emit JSON array; with `--deep`, emit the model's full ~90-field object |
 
 Sort direction: `intelligence`/`coding`/`agentic`/`speed` sort **descending** (best first);
 `price`/`latency` sort **ascending** (cheapest/snappiest first); `name` sorts A→Z.

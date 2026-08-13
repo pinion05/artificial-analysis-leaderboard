@@ -56,6 +56,13 @@ node aa-leaderboard.js --creator deepseek
 # Filter by model name (substring, case-insensitive)
 node aa-leaderboard.js --model 'mini' --top 10
 
+# Deep profile of ONE model: identity, all 3 indices, every benchmark,
+# full price breakdown (input/output/cache/blends), and the speed/latency
+# percentile distribution (p5–p95). Works by display name OR slug.
+node aa-leaderboard.js --deep --model 'Claude Opus 5 (max)'
+node aa-leaderboard.js --deep --model claude-opus-5          # slug works too
+node aa-leaderboard.js --deep --model claude-opus-5 --json   # raw ~90-field payload
+
 # Machine-readable JSON (for piping / further processing)
 node aa-leaderboard.js --json --top 20
 node aa-leaderboard.js --json --sort coding --creator google
@@ -68,11 +75,27 @@ node aa-leaderboard.js --json --sort coding --creator google
 | `--top N` | Limit to top N rows (after sort + filter) |
 | `--sort FIELD` | `intelligence` (default) · `coding` · `agentic` · `speed` · `price` · `latency` · `name` |
 | `--creator X` | Filter: creator contains X (case-insensitive) |
-| `--model X` | Filter: model name contains X (case-insensitive) |
+| `--model X` | Filter: model name **or slug** contains X (case-insensitive). Required with `--deep`. |
+| `--deep` | Full single-model profile (use with `--model X`): indices, every benchmark, price breakdown, latency percentiles |
 | `--table` | Human-readable aligned table (default) |
-| `--json` | Emit JSON array |
+| `--json` | Emit JSON array; with `--deep`, emit the model's full ~90-field object |
 
 **Sort direction:** `intelligence`/`coding`/`agentic`/`speed` sort **descending** (best first); `price`/`latency` sort **ascending** (cheapest/snappiest first); `name` sorts A→Z. Rows with `--` in the sort field sink to the bottom.
+
+## Deep single-model profile (`--deep`)
+
+`--deep` trades the many-rows table for a **full profile of one model**, surfacing
+the ~90 fields the site embeds per model (the table shows only ~8). Requires
+`--model X` (name or slug, substring OK; an exact match wins ties). Sections:
+
+- **Identity** — full name, slug, creator + country, release date, context window, size/price tier, reasoning / open-weights flags, modalities, OpenRouter id
+- **Composite Indices** — Intelligence / Coding / Agentic (0–100)
+- **Benchmarks** — GPQA, MMMU-Pro, HLE, Terminal-Bench (v2.1 + hard), SciCode, τ²-Bench, Long-Context Reasoning, GDPval (normalized + Elo w/ 95% CI), Critical Point, Analyst Agent, IT-Bench (SRE), IF-Bench, Omniscience (accuracy / non-hallucination / score)
+- **Pricing** — input / output / cache-read (w/ discount %) / cache-write, plus blended variants (7:2:1 is the leaderboard's headline price)
+- **Speed & latency distribution** — throughput and time-to-first-token across **p5 / p25 / p50 / p75 / p95** (a single median hides the long-tail reasoning runs), plus end-to-end and answer speed
+- **Intelligence Index internals** — cost / time / tokens per eval task
+
+`--deep --json` emits the whole decoded object (nested objects intact, `$undefined` normalised to null) for programmatic use.
 
 ## Install as an agent skill
 
@@ -103,7 +126,7 @@ node aa-leaderboard.js --sort coding --top 10
 
 ## How it works
 
-The leaderboard page is Next.js SSR; the full per-model data payload is embedded in the HTML as escaped JSON. `parse()` splits on each model's `id`, `field()` reads each field by its escaped key, and records are de-duplicated by slug (preferring the copy with the most non-null metrics). The blended price uses Artificial Analysis' `price1mBlended7To2To1` blend, which matches the site's default table column.
+The leaderboard page is Next.js SSR; the full per-model data payload is embedded in the HTML as escaped JSON. `parse()` splits on each model's `id`, `field()` reads each field by its escaped key, and records are de-duplicated by slug (preferring the copy with the most non-null metrics). `--deep` goes further: `deepExtract()` locates the target record, `braceMatch()` walks from its opening brace to its matching close (treating `\"` as an in-string toggle so braces inside string values are skipped), and the slice is double-parsed — once to unescape the embedded JSON string, once to materialise the object — yielding the full ~90-field model payload. The blended price uses Artificial Analysis' `price1mBlended7To2To1` blend, which matches the site's default table column.
 
 ## Files
 

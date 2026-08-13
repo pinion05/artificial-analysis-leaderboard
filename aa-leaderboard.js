@@ -19,12 +19,17 @@
  *   --top N        limit to top N (after sort + filter)
  *   --sort FIELD   intelligence(default)|coding|agentic|speed|price|latency|name
  *   --creator X    filter by creator (substring, case-insensitive)
- *   --model X      filter by model name (substring, case-insensitive)
+ *   --model X      filter by model name or slug (substring, case-insensitive)
+ *   --deep         full single-model profile (use with --model X): identity, indices,
+ *                  every benchmark, full price breakdown, and the speed/latency
+ *                  percentile distribution. Pair with --json for the raw 90+-field payload.
  *
  * Usage:
  *   aa-leaderboard.js --top 20
  *   aa-leaderboard.js --sort coding --top 10
  *   aa-leaderboard.js --sort agentic --creator anthropic --json
+ *   aa-leaderboard.js --deep --model 'Claude Opus 5 (max)'
+ *   aa-leaderboard.js --deep --model claude-opus-5 --json
  */
 const https = require('https');
 
@@ -135,6 +140,188 @@ function num(v) {
   return m ? parseFloat(m[0]) : null;
 }
 
+// ── deep single-model profile ─────────────────────────────────────────────
+
+/**
+ * Walk an escaped-JSON object from its opening '{' to its matching '}', treating
+ * `\"` (backslash + quote — how the embedded JSON encodes a real quote) as an
+ * in-string toggle so braces that appear inside string values are not counted.
+ * Returns the index just past the closing '}', or -1 if unbalanced.
+ */
+function braceMatch(html, start) {
+  let depth = 0, instr = false, k = start;
+  while (k < html.length) {
+    const ch = html[k];
+    if (ch === '\\' && html[k + 1] === '"') { instr = !instr; k += 2; continue; }
+    if (ch === '"') { instr = !instr; k++; continue; }
+    if (!instr) {
+      if (ch === '{') depth++;
+      else if (ch === '}') { depth--; if (depth === 0) return k + 1; }
+    }
+    k++;
+  }
+  return -1;
+}
+
+/** Recursively replace RSC `$undefined` sentinels with null. */
+function scrub$undef(o) {
+  if (Array.isArray(o)) return o.map(scrub$undef);
+  if (o && typeof o === 'object') {
+    for (const k in o) o[k] = o[k] === '$undefined' ? null : scrub$undef(o[k]);
+    return o;
+  }
+  return o;
+}
+
+/**
+ * Find the richest embedded record matching `query` (matched against name,
+ * shortName, and slug, case-insensitive substring; an exact shortName/slug/name
+ * wins ties) and return its fully decoded object (90+ fields). Each record is
+ * decoded by brace-matching its opening brace and double-parsing the slice: the
+ * RSC payload embeds the model object as a JSON string, so parse once to unescape
+ * and once to materialise the object.
+ */
+function deepExtract(html, query) {
+  const q = String(query).toLowerCase();
+  const ID = '\\"id\\":\\"';
+  const RICH_KEYS = ['gpqa', 'mmmuPro', 'hle', 'codingIndex', 'agenticIndex', 'gdpvalNormalized', 'omniscienceAccuracy', 'terminalbenchV21', 'scicode', 'lcr', 'tauBanking'];
+  let best = null;
+  let p = html.indexOf(ID);
+  while (p !== -1) {
+    const objStart = p - 1; // the '{' sits just before '"id":"'
+    const win = html.slice(objStart, objStart + 9000);
+    if (win.includes('\\"intelligenceIndex\\"') && win.includes('\\"modelCreatorName\\"')) {
+      const name = field(win, 'name') || '';
+      const short = field(win, 'shortName') || '';
+      const slug = field(win, 'slug') || '';
+      if ([name, short, slug].some((s) => s.toLowerCase().includes(q))) {
+        const exact = short.toLowerCase() === q || slug.toLowerCase() === q || name.toLowerCase() === q;
+        const intel = field(win, 'intelligenceIndex');
+        const rich = RICH_KEYS.reduce((a, k) => a + (field(win, k) != null ? 1 : 0), 0);
+        const better = !best
+          || (exact && !best.exact)
+          || (exact === best.exact && rich > best.rich)
+          || (exact === best.exact && rich === best.rich && (intel || -1) > (best.intel || -1));
+        if (better) {
+          const end = braceMatch(html, objStart);
+          let full = null;
+          if (end > 0) {
+            try { full = scrub$undef(JSON.parse(JSON.parse('"' + html.slice(objStart, end) + '"'))); }
+            catch (e) { full = null; }
+          }
+          if (full) best = { full, exact, rich, intel, name, short, slug };
+        }
+      }
+    }
+    p = html.indexOf(ID, p + 1);
+  }
+  return best;
+}
+
+// formatters
+const pct = (v) => (v == null ? '--' : (v * 100).toFixed(1) + '%');
+const money = (v) => (v == null ? '--' : '$' + Number(v).toFixed(2));
+const num1 = (v) => (v == null ? '--' : Number(v).toFixed(1));
+const sec = (v) => (v == null ? '--' : Number(v).toFixed(1) + 's');
+const spd = (v) => (v == null ? '--' : Number(v).toFixed(1) + ' t/s');
+const yn = (v) => (v == null ? '--' : (v ? 'yes' : 'no'));
+function tokens(v) {
+  if (v == null) return '--';
+  v = Number(v);
+  if (v >= 1e9) return (v / 1e9).toFixed(2) + 'B';
+  if (v >= 1e6) return (v / 1e6).toFixed(2) + 'M';
+  if (v >= 1e3) return (v / 1e3).toFixed(1) + 'k';
+  return String(Math.round(v));
+}
+const getPath = (o, path) => path.split('.').reduce((a, k) => (a == null ? a : a[k]), o);
+
+function printDeep(o, exact) {
+  const W = 20;
+  const kv = (label, val) => console.log(`  ${label.padEnd(W)} ${val}`);
+  const bar = (t) => console.log('\n▸ ' + t);
+
+  console.log('════════════════════════════════════════════════════');
+  console.log('  ' + (o.shortName || o.name));
+  if (!exact) console.log('  (best substring match — pass a more specific --model to be sure)');
+  console.log('════════════════════════════════════════════════════');
+
+  bar('Identity');
+  kv('Name', o.name || '--');
+  kv('Slug', o.slug || '--');
+  kv('Creator', [o.modelCreatorName, o.modelCreatorCountry && o.modelCreatorCountry.toUpperCase()].filter(Boolean).join(' · '));
+  kv('Released', o.releaseDate || '--');
+  kv('Context', tokens(o.contextWindowTokens));
+  kv('Size / price tier', [o.sizeClass, o.priceClass].filter((x) => x != null).join(' / ') || '--');
+  kv('Reasoning', yn(o.isReasoning));
+  kv('Open weights', yn(o.isOpenWeights));
+  kv('Status', o.deprecated ? 'deprecated' : 'live');
+  const inM = [['Text', 'inputModalityText'], ['Image', 'inputModalityImage'], ['Audio', 'inputModalitySpeech'], ['Video', 'inputModalityVideo']].filter(([, k]) => o[k]).map(([l]) => l);
+  const outM = [['Text', 'outputModalityText'], ['Image', 'outputModalityImage'], ['Audio', 'outputModalitySpeech'], ['Video', 'outputModalityVideo']].filter(([, k]) => o[k]).map(([l]) => l);
+  kv('Modalities', `in ${inM.join('/') || '--'} · out ${outM.join('/') || '--'}`);
+  if (o.openrouterApiId) kv('OpenRouter', o.openrouterApiId);
+
+  bar('Composite Indices (0–100, higher = better)');
+  kv('Intelligence', o.intelligenceIndex == null ? '--' : num1(o.intelligenceIndex) + (o.intelligenceIndexIsEstimated ? '  (est.)' : ''));
+  kv('Coding', num1(o.codingIndex));
+  kv('Agentic', num1(o.agenticIndex));
+
+  bar('Benchmarks');
+  kv('GPQA Diamond', pct(o.gpqa));
+  kv('MMMU-Pro', pct(o.mmmuPro));
+  kv("Humanity's Last Exam", pct(o.hle));
+  kv('Terminal-Bench v2.1', pct(o.terminalbenchV21));
+  kv('Terminal-Bench (hard)', pct(o.terminalbenchHard));
+  kv('SciCode', pct(o.scicode));
+  kv('τ²-Bench (Banking)', pct(o.tauBanking));
+  kv('τ²-Bench', pct(o.tau2));
+  kv('Long-Context Reasoning', pct(o.lcr));
+  kv('GDPval (normalized)', pct(o.gdpvalNormalized));
+  const g = o.gdpvalBreakdown;
+  if (g) kv('GDPval Elo', `${num1(g.elo)}  (${num1(g.lower95ci)}–${num1(g.upper95ci)} 95% CI · ${num1(g.avgTurns)} turns)`);
+  kv('Critical Point', pct(o.critpt));
+  kv('Analyst Agent', pct(o.analystAgent));
+  kv('IT-Bench (SRE)', pct(o.itbenchSre));
+  kv('IF-Bench', pct(o.ifbench));
+  if (o.omniscienceAccuracy != null || o.omniscienceNonHallucination != null) {
+    kv('Omniscience', `${pct(o.omniscienceAccuracy)} acc · ${pct(o.omniscienceNonHallucination)} non-halluc · ${num1(o.omniscience)} score`);
+  }
+
+  bar('Pricing (per 1M tokens)');
+  kv('Input', money(o.price1mInputTokens));
+  kv('Output', money(o.price1mOutputTokens));
+  kv('Cache read', o.cacheHitPrice == null ? '--' : `${money(o.cacheHitPrice)} (${Math.round((o.cacheHitDiscountPercent || 0) * 100)}% off)`);
+  kv('Cache write', money(o.cacheWritePrice));
+  kv('Blended 7:2:1', money(o.price1mBlended7To2To1) + '  (leaderboard headline)');
+  kv('Blended 0:3:1', money(o.price1mBlended0To3To1));
+  kv('Blended 0:1:1', money(o.price1mBlended0To1To1));
+
+  bar('Speed & latency distribution');
+  const cols = ['p5', 'p25', 'p50', 'p75', 'p95'];
+  const cw = [10, 10, 10, 10, 10];
+  const dist = [
+    ['Throughput', ['percentile05OutputTokensPerSecond', 'quartile25OutputTokensPerSecond', 'medianOutputTokensPerSecond', 'quartile75OutputTokensPerSecond', 'percentile95OutputTokensPerSecond'], (v) => num1(v) + ' t/s'],
+    ['First token', ['percentile05TimeToFirstTokenSeconds', 'quartile25TimeToFirstTokenSeconds', 'medianTimeToFirstTokenSeconds', 'quartile75TimeToFirstTokenSeconds', 'percentile95TimeToFirstTokenSeconds'], (v) => sec(v)],
+  ];
+  console.log('  ' + 'metric'.padEnd(W) + '  ' + cols.map((c, i) => c.padEnd(cw[i])).join('  '));
+  for (const [label, keys, fmt] of dist) {
+    const cells = keys.map((k, i) => String(fmt(getPath(o, k))).padEnd(cw[i]));
+    console.log('  ' + label.padEnd(W) + '  ' + cells.join('  '));
+  }
+  kv('End-to-end (median)', sec(o.medianEndToEndResponseTimeSeconds));
+  kv('Reasoning time (median)', sec(o.medianReasoningTimeSeconds));
+  kv('Answer speed (median)', spd(o.medianCanonicalAnswerOutputSpeed));
+
+  bar('Intelligence Index internals (per task)');
+  const cpt = getPath(o, 'intelligenceIndexCostPerTask.cost');
+  if (cpt) kv('Cost / task', money(cpt.total));
+  kv('Time / task', o.intelligenceIndexTimePerTask == null ? '--' : sec(o.intelligenceIndexTimePerTask));
+  const opt = o.intelligenceIndexOutputTokensPerTask;
+  if (opt) kv('Tokens / task', `reasoning ${tokens(opt.reasoning)} · answer ${tokens(opt.answer)} · out ${tokens(opt.output)}`);
+
+  console.log('\n  source: ' + URL + '   fetched: ' + new Date().toISOString());
+  console.log('  raw payload: ' + Object.keys(o).length + ' fields — add --json for the full object\n');
+}
+
 function main() {
   const args = process.argv.slice(2);
   const get = (k) => { const i = args.indexOf('--' + k); return i >= 0 ? args[i + 1] : null; };
@@ -147,6 +334,24 @@ function main() {
   const asTable = has('table') || (!asJson);
 
   fetch(URL).then((html) => {
+    if (has('deep')) {
+      const mq = get('model');
+      if (!mq) {
+        console.error('--deep requires --model X (model name or slug; substring OK).');
+        console.error('List models first:  node aa-leaderboard.js --top 30');
+        process.exit(1);
+      }
+      const found = deepExtract(html, mq);
+      if (!found) {
+        console.error('No model matching ' + JSON.stringify(mq) + '.');
+        console.error('Browse:  node aa-leaderboard.js --top 30');
+        process.exit(1);
+      }
+      if (asJson) console.log(JSON.stringify(found.full, null, 2));
+      else printDeep(found.full, found.exact);
+      return;
+    }
+
     let data = parse(html);
 
     if (creatorF) data = data.filter((d) => d.creator.toLowerCase().includes(creatorF));
